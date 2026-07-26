@@ -1,0 +1,475 @@
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import { readFileSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { createHash } from "crypto";
+import { analyzeFiles, type CodeFileItem } from "./lib/warden/engine.js";
+import { createSignedReviewReport, verifyReviewReport, type ReviewReport } from "./lib/warden/report.js";
+import { createReviewAttestation } from "./lib/warden/attest.js";
+import { storeArtifact, getArtifact } from "./lib/warden/artifacts.js";
+import { loadPolicyProfile } from "./lib/warden/policies.js";
+
+export function createServer(): McpServer {
+  const server = new McpServer({
+    name: "evidiq-warden-mcp",
+    version: "0.1.0",
+  });
+
+  // Helper to hash content
+  function hashString(input: string): string {
+    return createHash("sha256").update(input, "utf-8").digest("hex");
+  }
+
+  // --------------------------------------------------------------------------
+  // FREE TOOLS
+  // --------------------------------------------------------------------------
+
+  // 1. warden_capabilities
+  server.tool(
+    "warden_capabilities",
+    "Return rule catalog, supported languages, policy profiles, complexity thresholds, engine limits, and pricing.",
+    {},
+    async () => {
+      let rulesData = [];
+      try {
+        const rulesPath = resolve(process.cwd(), "data/rules.json");
+        const raw = readFileSync(rulesPath, "utf-8");
+        rulesData = JSON.parse(raw).rules || [];
+      } catch {
+        // Fallback if file not read directly
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                service: "evidiq-warden-mcp",
+                version: "0.1.0",
+                ruleSetVersion: "1.0.0",
+                supportedLanguages: ["typescript", "tsx", "javascript", "python"],
+                policyProfiles: ["agent-written-code", "security-baseline", "library-publish", "pre-commit"],
+                limits: {
+                  maxInputBytes: 524288,
+                  maxFiles: 40,
+                  ruleBudgetMs: 8000,
+                  artifactTtlMs: 600000,
+                },
+                pricing: {
+                  review_diff: "0.005 USDT0 (5000 atomic)",
+                  review_files: "0.01 USDT0 (10000 atomic)",
+                  analyze_complexity: "0.015 USDT0 (15000 atomic)",
+                  check_policy: "0.02 USDT0 (20000 atomic)",
+                  attest_review: "0.03 USDT0 (30000 atomic)",
+                },
+                rules: rulesData,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // 2. validate_source
+  server.tool(
+    "validate_source",
+    "Parse-check input files and return finding counts by severity without returning findings or charging.",
+    {
+      files: z.array(
+        z.object({
+          path: z.string(),
+          content: z.string(),
+        })
+      ),
+      policy: z.string().optional().default("agent-written-code"),
+    },
+    async ({ files, policy }) => {
+      const res = await analyzeFiles(files, policy);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                filesEvaluated: res.filesEvaluated,
+                languages: res.languages,
+                counts: res.counts,
+                verdict: res.verdict,
+                unsupportedFiles: res.unsupportedFiles,
+                parseFailures: res.parseFailures,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // 3. estimate_cost
+  server.tool(
+    "estimate_cost",
+    "Return exact atomic and human-readable USDT0 price for any Warden tool.",
+    {
+      toolName: z.string(),
+    },
+    async ({ toolName }) => {
+      const prices: Record<string, { atomic: string; usdt0: string }> = {
+        review_diff: { atomic: "5000", usdt0: "0.005" },
+        review_files: { atomic: "10000", usdt0: "0.01" },
+        analyze_complexity: { atomic: "15000", usdt0: "0.015" },
+        check_policy: { atomic: "20000", usdt0: "0.02" },
+        attest_review: { atomic: "30000", usdt0: "0.03" },
+      };
+
+      const info = prices[toolName] || { atomic: "0", usdt0: "0 (Free)" };
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ tool: toolName, cost: info }, null, 2),
+          },
+        ],
+      };
+    }
+  );
+
+  // 4. verify_review_report
+  server.tool(
+    "verify_review_report",
+    "Recompute SHA-256 digest and verify EIP-191 signature of a Warden review report.",
+    {
+      report: z.any(),
+    },
+    async ({ report }) => {
+      const result = await verifyReviewReport(report as ReviewReport);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+      };
+    }
+  );
+
+  // 5. get_artifact
+  server.tool(
+    "get_artifact",
+    "Retrieve a stored review report or attestation by artifact ID within its in-memory TTL.",
+    {
+      artifactId: z.string(),
+    },
+    async ({ artifactId }) => {
+      const data = getArtifact(artifactId);
+      if (!data) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: `Artifact ${artifactId} not found or expired.` }),
+            },
+          ],
+        };
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      };
+    }
+  );
+
+  // --------------------------------------------------------------------------
+  // PAID TOOLS
+  // --------------------------------------------------------------------------
+
+  // 6. review_diff
+  server.tool(
+    "review_diff",
+    "Review a unified diff: parse changed files, apply rules to changed regions, return findings, verdict, and signed report.",
+    {
+      diff: z.string(),
+      files: z
+        .array(
+          z.object({
+            path: z.string(),
+            content: z.string(),
+          })
+        )
+        .optional()
+        .default([]),
+      policy: z.string().optional().default("agent-written-code"),
+    },
+    async ({ diff, files, policy }) => {
+      const totalBytes = Buffer.byteLength(diff, "utf-8");
+      const combinedHash = hashString(diff);
+
+      const res = await analyzeFiles(files, policy, diff);
+
+      const report = await createSignedReviewReport({
+        filesCount: files.length || 1,
+        totalBytes,
+        combinedContentHash: combinedHash,
+        languages: res.languages,
+        findings: res.findings,
+        counts: res.counts,
+        verdict: res.verdict,
+        policy: res.policy,
+      });
+
+      const artifactId = `art_${report.integrity.digest.slice(0, 16)}`;
+      storeArtifact(artifactId, { report, findings: res.findings });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                data: {
+                  verdict: res.verdict,
+                  findings: res.findings,
+                  counts: res.counts,
+                  report,
+                  artifactId,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // 7. review_files
+  server.tool(
+    "review_files",
+    "Whole-file review of a small file set: apply AST rules across files, return findings, verdict, and signed report.",
+    {
+      files: z.array(
+        z.object({
+          path: z.string(),
+          content: z.string(),
+        })
+      ),
+      policy: z.string().optional().default("agent-written-code"),
+    },
+    async ({ files, policy }) => {
+      let totalBytes = 0;
+      let combinedContent = "";
+      for (const f of files) {
+        totalBytes += Buffer.byteLength(f.content, "utf-8");
+        combinedContent += f.path + ":" + f.content;
+      }
+      const combinedHash = hashString(combinedContent);
+
+      const res = await analyzeFiles(files, policy);
+
+      const report = await createSignedReviewReport({
+        filesCount: files.length,
+        totalBytes,
+        combinedContentHash: combinedHash,
+        languages: res.languages,
+        findings: res.findings,
+        counts: res.counts,
+        verdict: res.verdict,
+        policy: res.policy,
+      });
+
+      const artifactId = `art_${report.integrity.digest.slice(0, 16)}`;
+      storeArtifact(artifactId, { report, findings: res.findings });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                data: {
+                  verdict: res.verdict,
+                  findings: res.findings,
+                  counts: res.counts,
+                  report,
+                  artifactId,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // 8. analyze_complexity
+  server.tool(
+    "analyze_complexity",
+    "Analyze per-function cyclomatic complexity, nesting depth, length, parameter count, and duplicate blocks.",
+    {
+      files: z.array(
+        z.object({
+          path: z.string(),
+          content: z.string(),
+        })
+      ),
+    },
+    async ({ files }) => {
+      const res = await analyzeFiles(files, "agent-written-code");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                data: {
+                  filesEvaluated: res.filesEvaluated,
+                  languages: res.languages,
+                  structuralFindings: res.findings.filter((f) => f.family === "structure"),
+                  counts: res.counts,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // 9. check_policy
+  server.tool(
+    "check_policy",
+    "Evaluate a file set against a named policy profile (agent-written-code, security-baseline, library-publish, pre-commit) -> PASS/REVIEW/BLOCK.",
+    {
+      files: z.array(
+        z.object({
+          path: z.string(),
+          content: z.string(),
+        })
+      ),
+      policy: z.string().default("security-baseline"),
+    },
+    async ({ files, policy }) => {
+      let totalBytes = 0;
+      let combinedContent = "";
+      for (const f of files) {
+        totalBytes += Buffer.byteLength(f.content, "utf-8");
+        combinedContent += f.path + ":" + f.content;
+      }
+      const combinedHash = hashString(combinedContent);
+
+      const res = await analyzeFiles(files, policy);
+      const policyProfile = loadPolicyProfile(policy);
+
+      const report = await createSignedReviewReport({
+        filesCount: files.length,
+        totalBytes,
+        combinedContentHash: combinedHash,
+        languages: res.languages,
+        findings: res.findings,
+        counts: res.counts,
+        verdict: res.verdict,
+        policy: `${policyProfile.id}@${policyProfile.version}`,
+      });
+
+      const artifactId = `art_${report.integrity.digest.slice(0, 16)}`;
+      storeArtifact(artifactId, { report, violations: res.violations });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                data: {
+                  policy: `${policyProfile.id}@${policyProfile.version}`,
+                  verdict: res.verdict,
+                  violations: res.violations,
+                  counts: res.counts,
+                  report,
+                  artifactId,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  // 10. attest_review
+  server.tool(
+    "attest_review",
+    "Bind a review verdict to a content digest and optional commit sha, sign it, and anchor the digest on 0G.",
+    {
+      files: z.array(
+        z.object({
+          path: z.string(),
+          content: z.string(),
+        })
+      ),
+      policy: z.string().optional().default("agent-written-code"),
+      commitSha: z.string().optional(),
+    },
+    async ({ files, policy, commitSha }) => {
+      let totalBytes = 0;
+      let combinedContent = "";
+      for (const f of files) {
+        totalBytes += Buffer.byteLength(f.content, "utf-8");
+        combinedContent += f.path + ":" + f.content;
+      }
+      const combinedHash = hashString(combinedContent);
+
+      const res = await analyzeFiles(files, policy);
+
+      const report = await createSignedReviewReport({
+        filesCount: files.length,
+        totalBytes,
+        combinedContentHash: combinedHash,
+        languages: res.languages,
+        findings: res.findings,
+        counts: res.counts,
+        verdict: res.verdict,
+        policy: res.policy,
+      });
+
+      const attestation = await createReviewAttestation({
+        report,
+        commitSha,
+      });
+
+      const artifactId = `att_${attestation.attestationId}`;
+      storeArtifact(artifactId, { attestation, report });
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                data: {
+                  attestation,
+                  report,
+                  artifactId,
+                },
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  return server;
+}

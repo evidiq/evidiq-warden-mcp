@@ -1,0 +1,15 @@
+{
+  "id": "pre-commit",
+  "version": "1.0.0",
+  "description": "Fast and lenient pre-commit check profile. BLOCK on blockers only.",
+  "rules": {
+    "blockOnSeverities": ["blocker"],
+    "reviewOnSeverities": ["high"],
+    "thresholds": {
+      "complexity": 30,
+      "nesting": 8,
+      "functionLength": 150,
+      "maxParams": 8
+    }
+  }
+}

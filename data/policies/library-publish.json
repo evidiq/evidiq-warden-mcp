@@ -1,0 +1,15 @@
+{
+  "id": "library-publish",
+  "version": "1.0.0",
+  "description": "Publish-grade policy profile. BLOCK on injection, hygiene, and debug leftovers.",
+  "rules": {
+    "blockOnFamilies": ["injection", "hygiene"],
+    "reviewOnFamilies": ["reliability", "structure"],
+    "thresholds": {
+      "complexity": 15,
+      "nesting": 4,
+      "functionLength": 80,
+      "maxParams": 5
+    }
+  }
+}

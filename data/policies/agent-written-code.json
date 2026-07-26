@@ -1,0 +1,15 @@
+{
+  "id": "agent-written-code",
+  "version": "1.0.0",
+  "description": "Default policy profile for code written by AI agents. BLOCK on injection/execution risks, REVIEW on reliability findings.",
+  "rules": {
+    "blockOnFamilies": ["injection"],
+    "reviewOnFamilies": ["reliability", "hygiene", "structure"],
+    "thresholds": {
+      "complexity": 25,
+      "nesting": 6,
+      "functionLength": 120,
+      "maxParams": 7
+    }
+  }
+}

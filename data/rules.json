@@ -1,0 +1,225 @@
+{
+  "version": "1.0.0",
+  "rules": [
+    {
+      "id": "EVAL_DYNAMIC_CODE",
+      "family": "injection",
+      "severity": "blocker",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-95",
+      "why": "Evaluating dynamic string input as code can lead to arbitrary code execution.",
+      "fix": "Avoid eval(), new Function(), or exec() on dynamic input. Use safe data parsing or static dispatch.",
+      "heuristic": false
+    },
+    {
+      "id": "SHELL_INTERPOLATION",
+      "family": "injection",
+      "severity": "blocker",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-78",
+      "why": "Passing interpolated strings into a shell command allows shell command injection.",
+      "fix": "Use execFile or subprocess with an explicit array of argument strings instead of shell execution.",
+      "heuristic": false
+    },
+    {
+      "id": "SQL_STRING_BUILD",
+      "family": "injection",
+      "severity": "blocker",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-89",
+      "why": "Constructing SQL queries via string concatenation or interpolation enables SQL injection.",
+      "fix": "Use parameterized queries or prepared statements with parameter placeholders.",
+      "heuristic": false
+    },
+    {
+      "id": "PATH_FROM_INPUT",
+      "family": "injection",
+      "severity": "high",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-22",
+      "why": "Joining file system paths with unvalidated user input creates path traversal risk.",
+      "fix": "Sanitize path inputs or verify path containment using path.resolve() / path.relative() check.",
+      "heuristic": false
+    },
+    {
+      "id": "URL_FROM_INPUT",
+      "family": "injection",
+      "severity": "medium",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-918",
+      "why": "Constructing outbound HTTP requests from non-literal URL inputs creates Server-Side Request Forgery (SSRF) risk.",
+      "fix": "Validate URL schemes and hostname allowlists before initiating outbound requests.",
+      "heuristic": true
+    },
+    {
+      "id": "UNSAFE_DESERIALIZE",
+      "family": "injection",
+      "severity": "blocker",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-502",
+      "why": "Deserializing untrusted data with pickle.loads, yaml.load, or node vm execution allows code execution.",
+      "fix": "Use yaml.safe_load, json.loads, or structured data formats instead of executable object deserialization.",
+      "heuristic": false
+    },
+    {
+      "id": "FLOATING_PROMISE",
+      "family": "reliability",
+      "severity": "medium",
+      "languages": ["typescript", "javascript"],
+      "cwe": "CWE-703",
+      "why": "An asynchronous Promise call is neither awaited, returned, nor caught, causing unhandled promise rejections.",
+      "fix": "Await the promise, return it, or attach a .catch() handler.",
+      "heuristic": false
+    },
+    {
+      "id": "SWALLOWED_ERROR",
+      "family": "reliability",
+      "severity": "high",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-391",
+      "why": "Catching an exception without logging, handling, or rethrowing hides unexpected system failures.",
+      "fix": "Log the error, handle the failure condition explicitly, or rethrow.",
+      "heuristic": false
+    },
+    {
+      "id": "BROAD_EXCEPT",
+      "family": "reliability",
+      "severity": "medium",
+      "languages": ["python"],
+      "cwe": "CWE-391",
+      "why": "Catching bare except or except Exception catches system signals and unrecoverable errors indiscriminately.",
+      "fix": "Catch specific exception classes or re-raise after logging.",
+      "heuristic": false
+    },
+    {
+      "id": "MUTABLE_DEFAULT_ARG",
+      "family": "reliability",
+      "severity": "high",
+      "languages": ["python"],
+      "cwe": "CWE-665",
+      "why": "Using mutable default arguments (e.g., def f(x=[])) retains state across function invocations.",
+      "fix": "Use None as the default argument value and initialize the mutable object inside the function body.",
+      "heuristic": false
+    },
+    {
+      "id": "NO_NETWORK_TIMEOUT",
+      "family": "reliability",
+      "severity": "medium",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-400",
+      "why": "Network request initiated without explicit timeout configuration can hang indefinitely.",
+      "fix": "Pass a timeout option or set signal / AbortController timeout on HTTP client calls.",
+      "heuristic": true
+    },
+    {
+      "id": "AWAIT_IN_LOOP",
+      "family": "reliability",
+      "severity": "low",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-400",
+      "why": "Awaiting asynchronous operations inside a loop runs operations sequentially when parallel execution may be possible.",
+      "fix": "Use Promise.all() or asyncio.gather() if loop iterations have no ordering dependencies.",
+      "heuristic": false
+    },
+    {
+      "id": "WEAK_HASH_FOR_AUTH",
+      "family": "hygiene",
+      "severity": "high",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-327",
+      "why": "Using MD5 or SHA1 in authentication, password, or security token contexts is cryptographically broken.",
+      "fix": "Use bcrypt, argon2, scrypt, or SHA-256/SHA-512 for cryptographic integrity.",
+      "heuristic": true
+    },
+    {
+      "id": "INSECURE_RANDOM",
+      "family": "hygiene",
+      "severity": "medium",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-330",
+      "why": "Math.random() or random.random() is not cryptographically secure for generating keys, nonces, or tokens.",
+      "fix": "Use crypto.getRandomValues(), crypto.randomBytes(), or secrets module in Python.",
+      "heuristic": true
+    },
+    {
+      "id": "HARDCODED_CREDENTIAL_SHAPE",
+      "family": "hygiene",
+      "severity": "high",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-798",
+      "why": "Literal string matches a known API key or credential pattern.",
+      "fix": "Store credentials in environment variables. For deep secret scanning, route to EVIDIQ Redact.",
+      "heuristic": false
+    },
+    {
+      "id": "PERMISSIVE_CORS",
+      "family": "hygiene",
+      "severity": "high",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-942",
+      "why": "Configuring Access-Control-Allow-Origin: * alongside credentialed requests allows unauthorized cross-site data access.",
+      "fix": "Specify trusted origin domains explicitly instead of wildcard '*'.",
+      "heuristic": false
+    },
+    {
+      "id": "DEBUG_LEFTOVER",
+      "family": "hygiene",
+      "severity": "low",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-489",
+      "why": "Debugger statements or debug logging of potential secret identifiers remain in production code.",
+      "fix": "Remove debugger statements and console.log / print of sensitive data before committing.",
+      "heuristic": false
+    },
+    {
+      "id": "COMPLEXITY_EXCEEDED",
+      "family": "structure",
+      "severity": "medium",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-1075",
+      "why": "Cyclomatic complexity of a function exceeds the configured threshold.",
+      "fix": "Refactor complex conditional branches into smaller helper functions.",
+      "heuristic": false
+    },
+    {
+      "id": "NESTING_EXCEEDED",
+      "family": "structure",
+      "severity": "medium",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-1075",
+      "why": "Deeply nested control structures degrade readability and maintainability.",
+      "fix": "Use guard clauses and early returns to flatten nested blocks.",
+      "heuristic": false
+    },
+    {
+      "id": "FUNCTION_TOO_LONG",
+      "family": "structure",
+      "severity": "low",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-1075",
+      "why": "Function length exceeds the maximum recommended line count.",
+      "fix": "Split long functions into cohesive single-responsibility functions.",
+      "heuristic": false
+    },
+    {
+      "id": "TOO_MANY_PARAMS",
+      "family": "structure",
+      "severity": "low",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-1075",
+      "why": "Parameter count exceeds threshold.",
+      "fix": "Group related parameters into an options object or parameter data structure.",
+      "heuristic": false
+    },
+    {
+      "id": "DUPLICATE_BLOCK",
+      "family": "structure",
+      "severity": "medium",
+      "languages": ["typescript", "javascript", "python"],
+      "cwe": "CWE-1041",
+      "why": "Identical code block detected multiple times.",
+      "fix": "Extract duplicate logic into a shared helper function.",
+      "heuristic": false
+    }
+  ]
+}

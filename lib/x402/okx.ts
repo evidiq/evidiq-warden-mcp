@@ -1,0 +1,260 @@
+import { OKXFacilitatorClient } from "@okxweb3/x402-core";
+import { x402ResourceServer } from "@okxweb3/x402-core/server";
+import type {
+  PaymentPayload as SdkPaymentPayload,
+  PaymentRequirements as SdkPaymentRequirements,
+} from "@okxweb3/x402-core/types";
+import { ExactEvmScheme } from "@okxweb3/x402-evm/exact/server";
+
+import type { OkxCredentials, RedactConfig } from "./config.js";
+import type { PaymentVerifier } from "./facilitator.js";
+import type {
+  PaymentPayload,
+  PaymentRequirements,
+  SettleResult,
+  VerifyResult,
+} from "./types.js";
+
+const TRANSACTION_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+
+function transactionHash(value: unknown): string | undefined {
+  return typeof value === "string" && TRANSACTION_HASH_PATTERN.test(value)
+    ? value
+    : undefined;
+}
+
+function reason(...candidates: Array<string | undefined>): string | undefined {
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim() !== "") {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+const SETTLE_POLL_INTERVAL_MS = 2_000;
+const SETTLE_POLL_DEADLINE_MS = 24_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+export class OkxSdkVerifier implements PaymentVerifier {
+  private readonly client: OKXFacilitatorClient;
+  private readonly server: x402ResourceServer;
+  private ready: Promise<void> | null = null;
+
+  constructor(
+    private readonly cfg: RedactConfig,
+    credentials: OkxCredentials
+  ) {
+    this.client = new OKXFacilitatorClient({
+      apiKey: credentials.apiKey,
+      secretKey: credentials.secretKey,
+      passphrase: credentials.passphrase,
+      baseUrl: credentials.baseUrl,
+      syncSettle: credentials.syncSettle,
+    });
+    this.server = new x402ResourceServer(this.client);
+    this.server.register(cfg.network as `${string}:${string}`, new ExactEvmScheme());
+  }
+
+  private initialize(): Promise<void> {
+    const pending =
+      this.ready ??
+      this.server.initialize().catch((error: unknown) => {
+        this.ready = null;
+        throw error;
+      });
+    this.ready = pending;
+    return pending;
+  }
+
+  async buildRequirements(amount: bigint): Promise<SdkPaymentRequirements[]> {
+    if (amount < 0n) throw new Error("x402 amount cannot be negative");
+    await this.initialize();
+    return this.server.buildPaymentRequirementsFromOptions(
+      [
+        {
+          scheme: "exact",
+          network: this.cfg.network as `${string}:${string}`,
+          payTo: this.cfg.payTo,
+          price: {
+            asset: this.cfg.asset,
+            amount: amount.toString(),
+            extra: {
+              name: this.cfg.domainName,
+              version: this.cfg.domainVersion,
+            },
+          },
+          maxTimeoutSeconds: 300,
+        },
+      ],
+      undefined
+    );
+  }
+
+  async verify(
+    payment: PaymentPayload,
+    requirements: PaymentRequirements
+  ): Promise<VerifyResult> {
+    await this.initialize();
+    const verdict = await this.server.verifyPayment(
+      payment as unknown as SdkPaymentPayload,
+      requirements as unknown as SdkPaymentRequirements
+    );
+    if (!verdict.isValid) {
+      return {
+        valid: false,
+        reason:
+          reason(verdict.invalidReason, verdict.invalidMessage) ??
+          "the OKX facilitator rejected the payment",
+      };
+    }
+    const payer = verdict.payer ?? payment.payload.authorization.from;
+    return { valid: true, payer: payer as `0x${string}` };
+  }
+
+  async settle(
+    payment: PaymentPayload,
+    requirements: PaymentRequirements
+  ): Promise<SettleResult> {
+    const fallbackPayer = payment.payload.authorization.from;
+    await this.initialize();
+
+    let response;
+    try {
+      response = await this.server.settlePayment(
+        payment as unknown as SdkPaymentPayload,
+        requirements as unknown as SdkPaymentRequirements
+      );
+    } catch (error) {
+      return {
+        status: "ambiguous",
+        success: false,
+        payer: fallbackPayer,
+        errorReason: `OKX facilitator settlement ended without a definitive response: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      };
+    }
+
+    const payer = response.payer ?? fallbackPayer;
+    const transaction = transactionHash(response.transaction);
+
+    if (response.status === "pending" || response.status === "timeout") {
+      if (!transaction) {
+        return {
+          status: "ambiguous",
+          success: false,
+          payer,
+          errorReason: `the OKX facilitator reported settlement ${response.status} without a transaction hash`,
+        };
+      }
+      return this.awaitSettlement(transaction, payer, response.status);
+    }
+
+    if (!response.success) {
+      return {
+        status: "failed",
+        success: false,
+        transaction,
+        payer,
+        errorReason:
+          reason(response.errorReason, response.errorMessage) ??
+          "the OKX facilitator settlement failed",
+      };
+    }
+
+    if (BigInt(requirements.amount) > 0n && !transaction) {
+      return {
+        status: "ambiguous",
+        success: false,
+        payer,
+        errorReason:
+          "the OKX facilitator reported success without a settlement transaction",
+      };
+    }
+
+    return {
+      status: "settled",
+      success: true,
+      transaction: transaction ?? "",
+      payer,
+    };
+  }
+
+  private async awaitSettlement(
+    transaction: string,
+    payer: string,
+    facilitatorStatus: "pending" | "timeout"
+  ): Promise<SettleResult> {
+    const unresolved: SettleResult = {
+      status: "pending",
+      success: false,
+      transaction,
+      payer,
+      errorReason: `the OKX facilitator reported settlement ${facilitatorStatus}; retry with the same authorization`,
+    };
+    if (!this.client.getSettleStatus) return unresolved;
+
+    const deadline = Date.now() + SETTLE_POLL_DEADLINE_MS;
+    let lastPayer = payer;
+    while (Date.now() < deadline) {
+      let status;
+      try {
+        status = await this.client.getSettleStatus(transaction);
+      } catch {
+        await sleep(SETTLE_POLL_INTERVAL_MS);
+        continue;
+      }
+      lastPayer = status.payer ?? lastPayer;
+      if (status.status === "success" || status.success === true) {
+        return { status: "settled", success: true, transaction, payer: lastPayer };
+      }
+      if (status.status === "failed" || status.success === false) {
+        return {
+          status: "failed",
+          success: false,
+          transaction,
+          payer: lastPayer,
+          errorReason:
+            reason(status.errorReason, status.errorMessage) ??
+            "the OKX facilitator reported the settlement failed",
+        };
+      }
+      await sleep(SETTLE_POLL_INTERVAL_MS);
+    }
+    return { ...unresolved, payer: lastPayer };
+  }
+
+  async checkSettlement(
+    _payment: PaymentPayload,
+    _requirements: PaymentRequirements,
+    settlement: Extract<SettleResult, { status: "pending" }>
+  ): Promise<SettleResult> {
+    if (!this.client.getSettleStatus) return settlement;
+
+    const status = await this.client.getSettleStatus(settlement.transaction);
+    const payer = status.payer ?? settlement.payer;
+    const transaction = transactionHash(status.transaction) ?? settlement.transaction;
+
+    if (status.status === "pending") {
+      return { ...settlement, payer, transaction };
+    }
+    if (status.status === "failed" || status.success === false) {
+      return {
+        status: "failed",
+        success: false,
+        transaction,
+        payer,
+        errorReason:
+          reason(status.errorReason, status.errorMessage) ??
+          "the OKX facilitator reported the settlement failed",
+      };
+    }
+    if (status.success === true) {
+      return { status: "settled", success: true, transaction, payer };
+    }
+    return { ...settlement, payer, transaction };
+  }
+}

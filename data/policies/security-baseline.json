@@ -1,0 +1,15 @@
+{
+  "id": "security-baseline",
+  "version": "1.0.0",
+  "description": "Strict security policy profile. BLOCK on any injection, hygiene, or security family finding.",
+  "rules": {
+    "blockOnFamilies": ["injection", "hygiene"],
+    "reviewOnFamilies": ["reliability", "structure"],
+    "thresholds": {
+      "complexity": 20,
+      "nesting": 5,
+      "functionLength": 100,
+      "maxParams": 6
+    }
+  }
+}

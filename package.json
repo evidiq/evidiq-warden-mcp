@@ -1,0 +1,46 @@
+{
+  "name": "@evidiq/warden-mcp",
+  "version": "0.1.0",
+  "description": "EVIDIQ Warden — deterministic AST code review gate for AI agents",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/server.js",
+  "bin": {
+    "evidiq-redact": "dist/start-server.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/start-server.js",
+    "dev": "tsx start-server.ts",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "@okxweb3/x402-core": "0.1.0",
+    "@okxweb3/x402-evm": "0.2.1",
+    "mcp-handler": "1.1.0",
+    "tree-sitter-wasms": "^0.1.13",
+    "viem": "2.55.8",
+    "web-tree-sitter": "^0.20.8",
+    "zod": "3.25.76"
+  },
+  "optionalDependencies": {
+    "@0gfoundation/0g-storage-ts-sdk": "1.2.10",
+    "ethers": "6.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.1",
+    "tsx": "4.23.1",
+    "typescript": "5.9.3",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "@hono/node-server": "2.0.11",
+    "axios": "1.18.1",
+    "ws": "8.21.1"
+  }
+}
