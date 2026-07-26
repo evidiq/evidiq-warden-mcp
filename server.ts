@@ -117,9 +117,26 @@ export function createServer(): McpServer {
     "estimate_cost",
     "Return exact atomic and human-readable USDT0 price for any Warden tool.",
     {
-      toolName: z.string(),
+      // `tool` is the fleet convention (Atlas, Lineage, Vault, Redact) and it is
+      // also the field this tool returns, so taking `toolName` on input
+      // contradicted its own output. `toolName` stays accepted as an alias
+      // because Sentinel uses it and agents copy whichever they saw first.
+      tool: z.string().optional(),
+      toolName: z.string().optional(),
     },
-    async ({ toolName }) => {
+    async ({ tool, toolName: toolNameAlias }) => {
+      const toolName = tool ?? toolNameAlias;
+      if (!toolName) {
+        return {
+          isError: true,
+          content: [
+            {
+              type: "text" as const,
+              text: 'estimate_cost requires "tool" — the name of the paid tool to price.',
+            },
+          ],
+        };
+      }
       const prices: Record<string, { atomic: string; usdt0: string }> = {
         review_diff: { atomic: "5000", usdt0: "0.005" },
         review_files: { atomic: "10000", usdt0: "0.01" },

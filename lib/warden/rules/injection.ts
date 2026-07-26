@@ -1,6 +1,6 @@
 import type Parser from "web-tree-sitter";
 import type { SupportedLanguage } from "../parse.js";
-import { walkAst, getNodeText, type RuleMatch } from "./common.js";
+import { walkAst, getNodeText, isFixedCommandArg, type RuleMatch } from "./common.js";
 
 export function checkInjectionRules(
   file: string,
@@ -95,7 +95,8 @@ export function checkInjectionRules(
             const args = node.childForFieldName("arguments");
             if (args && args.namedChildCount > 0) {
               const firstArg = args.namedChild(0)!;
-              if (firstArg.type === "template_string" || firstArg.type === "binary_expression") {
+              // Any command that is not a fixed literal is caller-controlled.
+              if (!isFixedCommandArg(firstArg, sourceCode)) {
                 matches.push({
                   ruleId: "SHELL_INTERPOLATION",
                   family: "injection",
@@ -103,8 +104,8 @@ export function checkInjectionRules(
                   line: startLine,
                   endLine,
                   cwe: "CWE-78",
-                  why: "Passing interpolated strings into a shell command enables command injection.",
-                  fix: "Use execFile or spawn with an explicit array of argument strings instead of shell command concatenation.",
+                  why: "The command passed to a shell is not a fixed literal, so a caller can influence what gets executed.",
+                  fix: "Use execFile or spawn with an explicit array of argument strings, and never build a shell command from a variable.",
                 });
               }
             }
@@ -124,22 +125,25 @@ export function checkInjectionRules(
             const args = node.childForFieldName("arguments");
             if (args && args.namedChildCount > 0) {
               const argStr = getNodeText(args, sourceCode);
-              if (argStr.includes("shell=True") || fnName === "os.system") {
+              const isShell =
+                argStr.includes("shell=True") ||
+                fnName === "os.system" ||
+                fnName === "os.popen";
+              if (isShell) {
                 const firstArg = args.namedChild(0)!;
-                if (firstArg.type === "string" || firstArg.type === "binary_operator" || firstArg.type === "format_specifier") {
-                  const argText = getNodeText(firstArg, sourceCode);
-                  if (argText.startsWith('f"') || argText.startsWith("f'") || argText.includes("%") || argText.includes(".format(")) {
-                    matches.push({
-                      ruleId: "SHELL_INTERPOLATION",
-                      family: "injection",
-                      severity: "blocker",
-                      line: startLine,
-                      endLine,
-                      cwe: "CWE-78",
-                      why: "Passing formatted/interpolated strings to shell execution enables command injection.",
-                      fix: "Pass arguments as a list to subprocess.run(..., shell=False).",
-                    });
-                  }
+                // A bare identifier reaching a shell is the worst case, and the
+                // previous version only looked at string literals, so it missed it.
+                if (!isFixedCommandArg(firstArg, sourceCode)) {
+                  matches.push({
+                    ruleId: "SHELL_INTERPOLATION",
+                    family: "injection",
+                    severity: "blocker",
+                    line: startLine,
+                    endLine,
+                    cwe: "CWE-78",
+                    why: "The command passed to a shell is not a fixed literal, so a caller can influence what gets executed.",
+                    fix: "Pass arguments as a list to subprocess.run(..., shell=False), and never interpolate into a shell string.",
+                  });
                 }
               }
             }

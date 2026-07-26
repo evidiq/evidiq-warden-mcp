@@ -93,6 +93,18 @@ export async function parseSource(filename: string, content: string): Promise<Pa
     const parser = new Parser();
     parser.setLanguage(language);
     const tree = parser.parse(content);
+    // tree-sitter is error-tolerant: it returns a tree for syntactically broken
+    // source, with ERROR / MISSING nodes in it. Treating that as a successful
+    // parse means a file that does not compile is reviewed against a partial tree
+    // and reported clean — a silent PASS on code nobody could even build.
+    // `hasError` is a method in this binding, not a property.
+    if (!tree || tree.rootNode.hasError()) {
+      return {
+        language: lang,
+        parsed: false,
+        error: "Source does not parse cleanly; the tree contains syntax errors",
+      };
+    }
     return { language: lang, parsed: true, tree };
   } catch (err: any) {
     return { language: lang, parsed: false, error: err?.message || String(err) };

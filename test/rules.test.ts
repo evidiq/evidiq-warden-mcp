@@ -83,3 +83,56 @@ describe("Warden Rule Engine Tests (True Positives & Near-Miss Negatives)", () =
     expect(fpMatches.some((m) => m.ruleId === "HARDCODED_CREDENTIAL_SHAPE")).toBe(false);
   });
 });
+
+describe("SHELL_INTERPOLATION — a non-literal command is the whole point", () => {
+  async function rules(path: string, content: string) {
+    const parsed = await parseSource(path, content);
+    if (!parsed.tree) throw new Error(`fixture did not parse: ${parsed.error}`);
+    return checkInjectionRules(path, parsed.language, parsed.tree, content).map((m) => m.ruleId);
+  }
+
+  // The first implementation only looked for a template literal or a formatted
+  // string, so a bare variable reaching a shell — the most common and most
+  // dangerous shape there is — produced no finding at all.
+  it("flags execSync called with a variable", async () => {
+    expect(
+      await rules("a.ts", 'import { execSync } from "child_process";\nexport const r = (cmd: string) => execSync(cmd);\n')
+    ).toContain("SHELL_INTERPOLATION");
+  });
+
+  it("flags subprocess.run(cmd, shell=True) with a variable", async () => {
+    expect(
+      await rules("b.py", "import subprocess\n\ndef run(cmd):\n    return subprocess.run(cmd, shell=True)\n")
+    ).toContain("SHELL_INTERPOLATION");
+  });
+
+  it("flags os.system with a variable", async () => {
+    expect(await rules("c.py", "import os\n\ndef run(cmd):\n    os.system(cmd)\n")).toContain(
+      "SHELL_INTERPOLATION"
+    );
+  });
+
+  it("flags an interpolated template literal", async () => {
+    expect(
+      await rules("d.ts", 'import { execSync } from "child_process";\nexport const r = (b: string) => execSync(`git checkout ${b}`);\n')
+    ).toContain("SHELL_INTERPOLATION");
+  });
+
+  it("stays quiet on a fixed literal command", async () => {
+    expect(
+      await rules("e.ts", 'import { execSync } from "child_process";\nexport const v = () => execSync("git --version");\n')
+    ).not.toContain("SHELL_INTERPOLATION");
+    expect(
+      await rules("f.ts", 'import { execSync } from "child_process";\nexport const v = () => execSync(`git --version`);\n')
+    ).not.toContain("SHELL_INTERPOLATION");
+    expect(
+      await rules("g.py", 'import subprocess\n\ndef v():\n    return subprocess.run("git --version", shell=True)\n')
+    ).not.toContain("SHELL_INTERPOLATION");
+  });
+
+  it("stays quiet when the word appears in a string", async () => {
+    expect(
+      await rules("h.ts", 'export const help = "run exec to evaluate a shell command";\n')
+    ).not.toContain("SHELL_INTERPOLATION");
+  });
+});

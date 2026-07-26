@@ -32,7 +32,12 @@ export type CodeFileItem = {
 export type AnalysisResult = {
   ruleSetVersion: string;
   policy: string;
+  /** Files actually parsed and rule-checked. */
   filesEvaluated: number;
+  /** Files the caller sent, including any that were skipped. */
+  filesSubmitted: number;
+  /** Unsupported language plus parse failures — reviewed by nothing. */
+  filesSkipped: number;
   languages: Record<string, number>;
   findings: Finding[];
   counts: {
@@ -126,12 +131,26 @@ export async function analyzeFiles(
     info: findings.filter((f) => f.severity === "info").length,
   };
 
-  const { verdict, violations } = evaluateVerdict(findings, policy);
+  const { verdict: findingsVerdict, violations } = evaluateVerdict(findings, policy);
+
+  // A file that was skipped was not reviewed, so it cannot contribute to a PASS.
+  // Reporting PASS while `unsupportedFiles` or `parseFailures` is non-empty is the
+  // failure this service exists to prevent: a gate that silently approves what it
+  // could not read. Such a result is REVIEW at best, and a request where nothing
+  // was analysable is never PASS.
+  const skipped = unsupportedFiles.length + parseFailures.length;
+  const analysed = effectiveFiles.length - skipped;
+  let verdict = findingsVerdict;
+  if (skipped > 0 && verdict === "PASS") verdict = "REVIEW";
+  if (analysed === 0 && effectiveFiles.length > 0) verdict = "REVIEW";
 
   return {
     ruleSetVersion: "1.0.0",
     policy: `${policy.id}@${policy.version}`,
-    filesEvaluated: effectiveFiles.length,
+    // Only files that were actually parsed and rule-checked.
+    filesEvaluated: analysed,
+    filesSubmitted: effectiveFiles.length,
+    filesSkipped: skipped,
     languages,
     findings,
     counts,
