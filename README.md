@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/evidiq/evidiq-warden-mcp/main/assets/evidiq-warden.png" width="200" alt="EVIDIQ Warden" />
+</p>
+
 # EVIDIQ Warden (`evidiq-warden-mcp`)
 
 **Deterministic, AST-Based Code-Review Gate for AI Agents**
