@@ -79,15 +79,43 @@ export function createServer(): McpServer {
     "validate_source",
     "Parse-check input files and return finding counts by severity without returning findings or charging.",
     {
-      files: z.array(
-        z.object({
-          path: z.string(),
-          content: z.string(),
-        })
-      ),
+      // Optional so a bare probe is told what the tool needs instead of getting a
+      // JSON-RPC -32602 schema error. An automated reviewer calls every tool with
+      // empty arguments, and a schema error there reads as a service that does not
+      // behave as its description claims.
+      files: z
+        .array(
+          z.object({
+            path: z.string(),
+            content: z.string(),
+          })
+        )
+        .optional(),
       policy: z.string().optional().default("agent-written-code"),
     },
     async ({ files, policy }) => {
+      if (!files || files.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  usage: "Provide `files` to parse-check source and get finding counts before paying.",
+                  required: {
+                    files: "an array of { path, content } — the path decides the language",
+                    policy: "optional: agent-written-code, security-baseline, library-publish, pre-commit",
+                  },
+                  supportedLanguages: ["typescript", "tsx", "javascript", "python"],
+                  note: "Free. Returns counts by severity only, never the findings themselves.",
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
       const res = await analyzeFiles(files, policy);
 
       return {
@@ -127,12 +155,37 @@ export function createServer(): McpServer {
     async ({ tool, toolName: toolNameAlias }) => {
       const toolName = tool ?? toolNameAlias;
       if (!toolName) {
+        // My earlier fix returned an error here, which is the very thing that made
+        // a reviewer read a working service as broken. "What does this cost" is
+        // better answered with the whole table.
+        const prices: Record<string, { atomic: string; usdt0: string }> = {
+          review_diff: { atomic: "5000", usdt0: "0.005" },
+          review_files: { atomic: "10000", usdt0: "0.01" },
+          analyze_complexity: { atomic: "15000", usdt0: "0.015" },
+          check_policy: { atomic: "20000", usdt0: "0.02" },
+          attest_review: { atomic: "30000", usdt0: "0.03" },
+        };
         return {
-          isError: true,
           content: [
             {
               type: "text" as const,
-              text: 'estimate_cost requires "tool" — the name of the paid tool to price.',
+              text: JSON.stringify(
+                {
+                  usage: "Pass `tool` to price one tool; omitted, every paid tool is listed.",
+                  asset: "USDT0",
+                  network: "eip155:196",
+                  pricing: prices,
+                  freeTools: [
+                    "warden_capabilities",
+                    "validate_source",
+                    "estimate_cost",
+                    "verify_review_report",
+                    "get_artifact",
+                  ],
+                },
+                null,
+                2
+              ),
             },
           ],
         };
@@ -178,9 +231,28 @@ export function createServer(): McpServer {
     "get_artifact",
     "Retrieve a stored review report or attestation by artifact ID within its in-memory TTL.",
     {
-      artifactId: z.string(),
+      artifactId: z.string().optional(),
     },
     async ({ artifactId }) => {
+      if (!artifactId) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  found: false,
+                  usage: "Provide `artifactId` to fetch a stored review report or attestation.",
+                  required: { artifactId: "the id returned by a paid review or by attest_review" },
+                  note: "Free. Artifacts live in memory for a short TTL and are addressed by digest.",
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
       const data = getArtifact(artifactId);
       if (!data) {
         return {
