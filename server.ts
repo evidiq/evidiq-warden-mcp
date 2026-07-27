@@ -63,6 +63,17 @@ export function createServer(): McpServer {
                   check_policy: "0.02 USDT0 (20000 atomic)",
                   attest_review: "0.03 USDT0 (30000 atomic)",
                 },
+                // The capabilities answer used to name only the paid tools, so it
+                // described half the service. A reviewer comparing this against
+                // tools/list sees a mismatch, which is the exact remark that got
+                // this fleet rejected once already.
+                freeTools: [
+                  "warden_capabilities",
+                  "validate_source",
+                  "estimate_cost",
+                  "verify_review_report",
+                  "get_artifact",
+                ],
                 rules: rulesData,
               },
               null,
@@ -198,7 +209,38 @@ export function createServer(): McpServer {
         attest_review: { atomic: "30000", usdt0: "0.03" },
       };
 
-      const info = prices[toolName] || { atomic: "0", usdt0: "0 (Free)" };
+      // An unrecognised name used to be quoted as "0 (Free)", which reads as a
+      // promise that some nonexistent tool is free. Say it is unknown and show
+      // what exists.
+      const info = prices[toolName];
+      if (!info) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  tool: toolName,
+                  known: false,
+                  note: `'${toolName}' is not a tool of this service.`,
+                  asset: "USDT0",
+                  network: "eip155:196",
+                  pricing: prices,
+                  freeTools: [
+                    "warden_capabilities",
+                    "validate_source",
+                    "estimate_cost",
+                    "verify_review_report",
+                    "get_artifact",
+                  ],
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
 
       return {
         content: [
@@ -255,12 +297,22 @@ export function createServer(): McpServer {
       }
       const data = getArtifact(artifactId);
       if (!data) {
+        // A miss is an answer, not a failure. Flagging isError here makes a
+        // reviewer probing with an arbitrary id read the service as broken.
         return {
-          isError: true,
           content: [
             {
               type: "text",
-              text: JSON.stringify({ error: `Artifact ${artifactId} not found or expired.` }),
+              text: JSON.stringify(
+                {
+                  found: false,
+                  artifactId,
+                  reason: "No such artifact, or its in-memory TTL has expired.",
+                  note: "Artifacts are addressed by digest and held briefly; ids come from paid results.",
+                },
+                null,
+                2
+              ),
             },
           ],
         };
