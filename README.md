@@ -2,6 +2,16 @@
   <img src="https://raw.githubusercontent.com/evidiq/evidiq-warden-mcp/main/assets/evidiq-warden.png" width="200" alt="EVIDIQ Warden" />
 </p>
 
+<p align="center">
+  <a href="https://mcp.evidiq.dev/warden/mcp"><img src="https://img.shields.io/badge/MCP%20Server-Live-6E56CF?style=flat-square" alt="MCP Server" /></a> <a href="https://0g.ai"><img src="https://img.shields.io/badge/0G-Storage%20Anchor-00C2A8?style=flat-square" alt="0G Storage anchor" /></a> <a href="https://www.oklink.com/xlayer"><img src="https://img.shields.io/badge/X%20Layer-USDT0-3CCF4E?style=flat-square" alt="X Layer USDT0" /></a> <a href="https://mcp.evidiq.dev/warden/x402"><img src="https://img.shields.io/badge/x402-0.005%E2%80%930.03%20USDT0-2563EB?style=flat-square" alt="x402 pricing" /></a> <a href="https://web3.okx.com/onchainos/dev-docs/payments/service-seller-sdk"><img src="https://img.shields.io/badge/Payments-Official%20OKX%20SDK-121212?style=flat-square&logo=okx&logoColor=white" alt="Official OKX Payment SDK" /></a> <a href="https://www.okx.ai/agents/9699"><img src="https://img.shields.io/badge/OKX.AI-Agent%20%239699%20Listed-121212?style=flat-square&logo=okx&logoColor=white" alt="OKX.AI Agent 9699 listed" /></a> <a href="./LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=flat-square" alt="License: MIT" /></a>
+</p>
+
+<p align="center">
+  <a href="https://evidiq.dev">evidiq.dev</a> &middot;
+  <a href="https://evidiq.dev/docs/warden">Warden Docs</a> &middot;
+  <a href="https://github.com/evidiq/evidiq-warden-mcp">Warden Repository</a>
+</p>
+
 # EVIDIQ Warden (`evidiq-warden-mcp`)
 
 **Deterministic, AST-Based Code-Review Gate for AI Agents**
@@ -92,7 +102,43 @@ claude mcp add --transport http evidiq-warden https://mcp.evidiq.dev/warden/mcp
 
 ---
 
-## 5. Local Development & Testing
+## 5. Architecture
+
+```
+agent (any MCP client)
+  │  tools/call review_diff | review_files | check_policy | attest_review
+  ▼
+Traefik ─ mcp.evidiq.dev/warden ─ /rubric-style prefix stripped ─ server.ts
+  │
+  ├─ lib/x402/gate.ts ......... payment gate: challenge, decode, verify, settle
+  │     └─ lib/x402/okx.ts .... official OKX SDK → OKX facilitator → X Layer
+  │
+  ├─ lib/warden/parse.ts ...... web-tree-sitter grammars: ts, tsx, js, python
+  │     └─ one AST per file, reused by every rule
+  │
+  ├─ lib/warden/rules/ ........ injection, secrets, reliability, hygiene, metrics
+  │     └─ pure functions over the AST; no rule may read the network
+  │
+  ├─ lib/warden/policy.ts ..... maps findings to PASS / REVIEW / BLOCK
+  │
+  ├─ lib/warden/report.ts ..... canonical report, SHA-256 digest, EIP-191 signature
+  ├─ lib/warden/attest.ts ..... signed attestation; refuses without a signer key
+  └─ lib/og/ .................. digest anchored to 0G Storage, best effort
+```
+
+Everything that decides a verdict is a pure function over an AST, so the same
+source yields the same findings, the same verdict and the same digest. No model
+runs in the review path.
+
+Findings carry a rule id, severity, file, line range and an explanation — never a
+copy of the source. A report gets pasted into tickets, and a report that quoted the
+code it flagged would leak the thing it was asked to protect.
+
+Signing is optional and honest about it: with no signer configured a report comes
+back unsigned and says so, while `attest_review` refuses outright, because an
+attestation is nothing but its signature.
+
+## 6. Local Development & Testing
 
 ```bash
 # Install dependencies
@@ -110,6 +156,6 @@ npm start
 
 ---
 
-## 6. License
+## 7. License
 
 MIT License. Copyright (c) 2026 EVIDIQ Team.
