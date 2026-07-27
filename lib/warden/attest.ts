@@ -33,10 +33,16 @@ export async function createReviewAttestation(params: {
   const verdict = params.report.verdict;
   const policy = params.report.policy;
 
-  const rawKey =
-    params.signerPrivateKey ??
-    process.env.WARDEN_SIGNER_PRIVATE_KEY ??
-    "0x710003befbfe8dbb063ed4936c9fb94a012987e2720fa46f36202d1190e05c66";
+  // No hardcoded fallback signer: see lib/warden/report.ts. An attestation is
+  // nothing but its signature, so signing with a key from a public repository
+  // would make the whole tool a decoration.
+  const rawKey = params.signerPrivateKey ?? process.env.WARDEN_SIGNER_PRIVATE_KEY?.trim();
+  if (!rawKey) {
+    throw new Error(
+      "attest_review requires a configured signer: WARDEN_SIGNER_PRIVATE_KEY is not set. " +
+        "An unsigned attestation would attest to nothing."
+    );
+  }
 
   const formattedKey = (rawKey.startsWith("0x") || rawKey.startsWith("0X") ? rawKey : "0x" + rawKey) as `0x${string}`;
   const account = privateKeyToAccount(formattedKey);

@@ -26,8 +26,11 @@ export type ReviewReport = {
   integrity: {
     algorithm: "SHA-256";
     digest: string;
-    signature: string;
-    signer: string;
+    // Optional: a report is signed only when a signer key is configured.
+    signature?: string;
+    signer?: string;
+    signed?: false;
+    note?: string;
   };
 };
 
@@ -67,21 +70,28 @@ export async function createSignedReviewReport(params: {
 
   const digest = hashText(canonicalEnvelope);
 
-  const rawKey =
-    params.signerPrivateKey ??
-    process.env.WARDEN_SIGNER_PRIVATE_KEY ??
-    "0x710003befbfe8dbb063ed4936c9fb94a012987e2720fa46f36202d1190e05c66";
+  // No hardcoded fallback signer. This file is in a public repository, so a key
+  // literal here is a key anyone can sign with — and a signature anyone can
+  // produce proves nothing while looking exactly like proof.
+  const rawKey = params.signerPrivateKey ?? process.env.WARDEN_SIGNER_PRIVATE_KEY?.trim();
 
-  const formattedKey = (rawKey.startsWith("0x") || rawKey.startsWith("0X") ? rawKey : "0x" + rawKey) as `0x${string}`;
-
-  let account;
-  try {
-    account = privateKeyToAccount(formattedKey);
-  } catch (err: any) {
-    throw new Error(`Invalid WARDEN_SIGNER_PRIVATE_KEY: ${err?.message || err}`);
+  let signature: string | undefined;
+  let signer: string | undefined;
+  if (rawKey) {
+    const formattedKey = (rawKey.startsWith("0x") || rawKey.startsWith("0X")
+      ? rawKey
+      : "0x" + rawKey) as `0x${string}`;
+    try {
+      const account = privateKeyToAccount(formattedKey);
+      signature = await account.signMessage({ message: digest });
+      signer = account.address;
+    } catch (err: any) {
+      console.warn(
+        "[warden] WARDEN_SIGNER_PRIVATE_KEY is set but unusable — report returned UNSIGNED:",
+        err?.message || err
+      );
+    }
   }
-
-  const signature = await account.signMessage({ message: digest });
 
   return {
     engine,
@@ -99,8 +109,9 @@ export async function createSignedReviewReport(params: {
     integrity: {
       algorithm: "SHA-256",
       digest,
-      signature,
-      signer: account.address,
+      ...(signature && signer
+        ? { signature, signer }
+        : { signed: false, note: "No signer configured; the digest is verifiable, the origin is not." }),
     },
   };
 }
@@ -125,6 +136,19 @@ export async function verifyReviewReport(report: ReviewReport): Promise<{
 
     const expectedDigest = hashText(canonicalEnvelope);
     const digestMatch = expectedDigest === report.integrity.digest;
+
+    // An unsigned report is neither invalid nor verified. Report which question
+    // was actually answered instead of throwing on the missing signature.
+    if (!report.integrity.signature || !report.integrity.signer) {
+      return {
+        valid: false,
+        digestMatch,
+        signatureValid: false,
+        error: digestMatch
+          ? "Report carries no signature: the digest matches, but the origin cannot be attributed."
+          : "Report carries no signature, and the digest does not match either.",
+      };
+    }
 
     const signatureValid = await verifyMessage({
       address: report.integrity.signer as `0x${string}`,
